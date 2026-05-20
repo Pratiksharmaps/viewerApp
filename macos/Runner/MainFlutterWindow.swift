@@ -8,24 +8,25 @@ class MainFlutterWindow: NSWindow, QLPreviewPanelDataSource, QLPreviewPanelDeleg
   var fileEventsChannel: FlutterMethodChannel?
 
   override func awakeFromNib() {
+    NSLog("🔵 [MainFlutterWindow] awakeFromNib called")
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
     RegisterGeneratedPlugins(registry: flutterViewController)
 
-    // --- File Events Channel ---
-    // This channel lives here because we have guaranteed access to FlutterViewController
     fileEventsChannel = FlutterMethodChannel(
       name: "com.viewerapp/file_events",
       binaryMessenger: flutterViewController.engine.binaryMessenger
     )
 
     fileEventsChannel?.setMethodCallHandler { [weak self] (call, result) in
+      NSLog("🔵 [MainFlutterWindow] Dart called: \(call.method)")
       if call.method == "ready" {
-        // Flutter UI is ready - check if AppDelegate queued a file for us
+        NSLog("🔵 [MainFlutterWindow] Flutter is ready. pendingFile = \(AppDelegate.pendingFile ?? "nil")")
         if let pending = AppDelegate.pendingFile {
           AppDelegate.pendingFile = nil
+          NSLog("🔵 [MainFlutterWindow] Sending pending file to Flutter: \(pending)")
           self?.fileEventsChannel?.invokeMethod("onFileOpened", arguments: ["path": pending])
         }
         result(nil)
@@ -34,7 +35,6 @@ class MainFlutterWindow: NSWindow, QLPreviewPanelDataSource, QLPreviewPanelDeleg
       }
     }
 
-    // --- QuickLook Channel ---
     let quickLookChannel = FlutterMethodChannel(
       name: "com.viewerapp/quicklook",
       binaryMessenger: flutterViewController.engine.binaryMessenger
@@ -44,6 +44,7 @@ class MainFlutterWindow: NSWindow, QLPreviewPanelDataSource, QLPreviewPanelDeleg
       if call.method == "showQuickLook",
          let args = call.arguments as? [String: Any],
          let path = args["path"] as? String {
+        NSLog("🔵 [MainFlutterWindow] showQuickLook for: \(path)")
         self?.fileURLToPreview = URL(fileURLWithPath: path)
         self?.showQuickLookPanel()
         result(nil)
@@ -53,14 +54,15 @@ class MainFlutterWindow: NSWindow, QLPreviewPanelDataSource, QLPreviewPanelDeleg
     }
 
     super.awakeFromNib()
+    NSLog("🔵 [MainFlutterWindow] setup complete")
   }
 
-  /// Called by AppDelegate when a file is opened while the app is already running
   func sendFileToFlutter(path: String) {
+    NSLog("🔵 [MainFlutterWindow] sendFileToFlutter: \(path)")
     if let channel = fileEventsChannel {
       channel.invokeMethod("onFileOpened", arguments: ["path": path])
     } else {
-      // Channel not ready yet - store for when ready fires
+      NSLog("⚠️ [MainFlutterWindow] channel not ready, storing in pendingFile")
       AppDelegate.pendingFile = path
     }
   }
@@ -76,8 +78,6 @@ class MainFlutterWindow: NSWindow, QLPreviewPanelDataSource, QLPreviewPanelDeleg
     }
   }
 
-  // MARK: - QLPreviewPanelDataSource
-
   func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
     return fileURLToPreview != nil ? 1 : 0
   }
@@ -85,8 +85,6 @@ class MainFlutterWindow: NSWindow, QLPreviewPanelDataSource, QLPreviewPanelDeleg
   func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
     return fileURLToPreview as QLPreviewItem?
   }
-
-  // MARK: - QLPreviewPanelDelegate
 
   override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
     return true

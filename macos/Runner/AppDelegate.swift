@@ -4,7 +4,6 @@ import FlutterMacOS
 @main
 class AppDelegate: FlutterAppDelegate {
 
-  // Shared pending file - set by openFile before Flutter is ready
   static var pendingFile: String?
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -15,17 +14,29 @@ class AppDelegate: FlutterAppDelegate {
     return true
   }
 
-  override func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+  // ✅ MODERN API - this is what Finder "Open With" actually uses on macOS 10.13+
+  override func application(_ application: NSApplication, open urls: [URL]) {
+    NSLog("🟢 [AppDelegate] application(_:open:) called with \(urls.count) URL(s)")
+    guard let url = urls.first else { return }
+    NSLog("🟢 [AppDelegate] URL = \(url.path)")
     NSApp.activate(ignoringOtherApps: true)
+    AppDelegate.pendingFile = url.path
+    if let window = mainFlutterWindow as? MainFlutterWindow {
+      NSLog("🟢 [AppDelegate] Window exists, sending file directly")
+      window.sendFileToFlutter(path: url.path)
+    } else {
+      NSLog("⚠️ [AppDelegate] Window not ready yet, stored in pendingFile")
+    }
+  }
 
-    // Store the path - MainFlutterWindow will pick it up once Flutter is ready
+  // Legacy API fallback
+  override func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+    NSLog("🟡 [AppDelegate] application(_:openFile:) called with \(filename)")
+    NSApp.activate(ignoringOtherApps: true)
     AppDelegate.pendingFile = filename
-
-    // If the window already has an active channel (app was already running), invoke directly
     if let window = mainFlutterWindow as? MainFlutterWindow {
       window.sendFileToFlutter(path: filename)
     }
-
     return true
   }
 }

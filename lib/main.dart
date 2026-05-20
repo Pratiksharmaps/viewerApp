@@ -5,6 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:crypto/crypto.dart';
+import 'dart:convert';
+import 'package:url_launcher/url_launcher.dart';
+import 'editors.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -79,6 +83,11 @@ class _MainScreenState extends State<MainScreen>
   late AnimationController _animController;
   late Animation<double> _fadeAnim;
 
+  // License Guard State
+  bool _isLicensed = true;
+  bool _loadingLicense = true;
+  final TextEditingController _licenseController = TextEditingController();
+
   @override
   void initState() {
     super.initState();
@@ -90,12 +99,65 @@ class _MainScreenState extends State<MainScreen>
     fileEventsChannel.setMethodCallHandler(_handleFileEvent);
     fileEventsChannel.invokeMethod('ready');
     _loadHistory();
+    _checkLicense();
   }
 
   @override
   void dispose() {
     _animController.dispose();
+    _licenseController.dispose();
     super.dispose();
+  }
+
+  Future<void> _checkLicense() async {
+    final prefs = await SharedPreferences.getInstance();
+    int launches = prefs.getInt('appLaunchCount') ?? 0;
+    launches++;
+    await prefs.setInt('appLaunchCount', launches);
+
+    bool licensed = prefs.getBool('isLicensed') ?? false;
+
+    setState(() {
+      _loadingLicense = false;
+      // Require license after the 1st launch
+      if (!licensed && launches > 1) {
+        _isLicensed = false;
+      } else {
+        _isLicensed = true;
+      }
+    });
+  }
+
+  Future<void> _verifyLicense() async {
+    final input = _licenseController.text.trim();
+    if (input.isEmpty) return;
+
+    final bytes = utf8.encode(input);
+    final digest = sha256.convert(bytes).toString();
+    
+    // Hash of "PratikSharma1"
+    if (digest == '17ec9b3e14f11a549eff9c8ae5211616695180b42c3d42deeb22bf7e39297353') {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isLicensed', true);
+      setState(() => _isLicensed = true);
+    } else {
+      _showError('Invalid License Key');
+    }
+  }
+
+  Future<void> _requestLicenseEmail() async {
+    final Uri emailLaunchUri = Uri(
+      scheme: 'mailto',
+      path: 'pratik.sde16@gmail.com',
+      query: 'subject=Requesting Viewer App License Key&body=can you provide me a key to use - %0A%0A[enter your reason here]',
+    );
+    try {
+      if (!await launchUrl(emailLaunchUri)) {
+        _showError('Could not launch email client.');
+      }
+    } catch (e) {
+      _showError('Error launching email: $e');
+    }
   }
 
   Future<void> _loadHistory() async {
@@ -112,7 +174,7 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  Future<void> _openFile(String path) async {
+  Future<void> _openFile(String path, {bool showPreview = true}) async {
     if (!File(path).existsSync()) {
       _showError('File not found: ${p.basename(path)}');
       return;
@@ -121,7 +183,19 @@ class _MainScreenState extends State<MainScreen>
     await FileHistoryService.addFile(path);
     await _loadHistory();
     _animController.forward(from: 0);
-    _showQuickLook(path);
+    if (showPreview) {
+      _showQuickLook(path);
+    }
+  }
+
+  void _selectRecent(String path) {
+    if (!File(path).existsSync()) {
+      _showError('File not found: ${p.basename(path)}');
+      _removeFromHistory(path);
+      return;
+    }
+    setState(() => _openedFilePath = path);
+    _animController.forward(from: 0);
   }
 
   Future<void> _pickFile() async {
@@ -147,11 +221,37 @@ class _MainScreenState extends State<MainScreen>
   }
 
   Future<void> _editFile(String path) async {
+    final ext = p.extension(path).toLowerCase();
+
+    // In-app editing is only supported for modern zip-based formats (.xlsx, .docx)
+    // Older binary formats (.xls, .doc) will fallback to native system apps.
+    if (ext == '.xlsx') {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ExcelEditorScreen(filePath: path),
+        ),
+      );
+    } else if (ext == '.docx') {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => WordEditorScreen(filePath: path),
+        ),
+      );
+    } else {
+      // Fallback: open in system default app for .xls, .doc
+      try {
+        await Process.run('open', [path]);
+      } catch (e) {
+        _showError('Could not open for editing: $e');
+      }
+    }
+  }
+
+  Future<void> _openInSystemApp(String path) async {
     try {
-      // Open in the default editor (TextEdit for .doc, Excel/Numbers for .xlsx)
       await Process.run('open', [path]);
     } catch (e) {
-      _showError('Could not open for editing: $e');
+      _showError('Could not open: $e');
     }
   }
 
@@ -195,25 +295,86 @@ class _MainScreenState extends State<MainScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (_loadingLicense) return const SizedBox();
+
     return Scaffold(
       backgroundColor: Colors.transparent,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF0D1117),
-              Color(0xFF161B22),
-              Color(0xFF0D1B2A),
-            ],
+      body: Stack(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Color(0xFF0D1117),
+                  Color(0xFF161B22),
+                  Color(0xFF0D1B2A),
+                ],
+              ),
+            ),
+            child: Row(
+              children: [
+                _buildSidebar(),
+                _buildMainContent(),
+              ],
+            ),
           ),
-        ),
-        child: Row(
-          children: [
-            _buildSidebar(),
-            _buildMainContent(),
-          ],
+          if (!_isLicensed) _buildLicenseOverlay(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLicenseOverlay() {
+    return Positioned.fill(
+      child: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 40, sigmaY: 40),
+          child: Container(
+            color: Colors.black.withOpacity(0.6),
+            child: Center(
+              child: _buildGlassCard(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.lock_rounded, color: Colors.orange, size: 56),
+                    const SizedBox(height: 24),
+                    const Text('License Required', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
+                    const SizedBox(height: 12),
+                    Text('Your trial period (1 launch) has expired. Please enter your license key to continue using the app.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14, height: 1.5)),
+                    const SizedBox(height: 32),
+                    TextField(
+                      controller: _licenseController,
+                      obscureText: true,
+                      style: const TextStyle(color: Colors.white, fontSize: 16),
+                      decoration: InputDecoration(
+                        hintText: 'Enter License Key',
+                        hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                        filled: true,
+                        fillColor: Colors.white.withOpacity(0.08),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    _buildGlassButton(
+                      onPressed: _verifyLicense,
+                      icon: Icons.key_rounded,
+                      label: 'Unlock App',
+                      gradient: const LinearGradient(colors: [Color(0xFF007AFF), Color(0xFF0051D5)]),
+                    ),
+                    const SizedBox(height: 16),
+                    TextButton(
+                      onPressed: _requestLicenseEmail,
+                      child: const Text('Request Key via Email', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                    )
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -341,7 +502,7 @@ class _MainScreenState extends State<MainScreen>
     final icon = _iconForFile(path);
 
     return GestureDetector(
-      onTap: () => _openFile(path),
+      onTap: () => _selectRecent(path),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         margin: const EdgeInsets.symmetric(vertical: 2),
@@ -580,7 +741,7 @@ class _MainScreenState extends State<MainScreen>
                           ),
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: _buildGlassButton(
                           onPressed: () => _editFile(path),
@@ -592,6 +753,18 @@ class _MainScreenState extends State<MainScreen>
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 10),
+                  _buildGlassButton(
+                    onPressed: () => _openInSystemApp(path),
+                    icon: Icons.open_in_new_rounded,
+                    label: 'Open using inbuilt app',
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.white.withOpacity(0.15),
+                        Colors.white.withOpacity(0.05),
+                      ],
+                    ),
                   ),
                 ],
               ),
