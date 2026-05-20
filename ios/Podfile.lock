@@ -1,0 +1,22 @@
+PODS:
+  - Flutter (1.0.0)
+  - quick_look (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - Flutter (from `Flutter`)
+  - quick_look (from `.symlinks/plugins/quick_look/ios`)
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: Flutter
+  quick_look:
+    :path: ".symlinks/plugins/quick_look/ios"
+
+SPEC CHECKSUMS:
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  quick_look: 189b72730b7c8407736ad8e4e89a6dd79dd552f8
+
+PODFILE CHECKSUM: 3c63482e143d1b91d2d2560aee9fb04ecc74ac7e
+
+COCOAPODS: 1.16.2
