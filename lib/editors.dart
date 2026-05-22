@@ -4,6 +4,7 @@ import 'package:spreadsheet_decoder/spreadsheet_decoder.dart';
 import 'package:flutter/material.dart' hide Border;
 import 'package:archive/archive.dart';
 import 'package:path/path.dart' as p;
+import 'package:pdfx/pdfx.dart';
 
 // ─────────────────────────────────────────
 // Excel Editor Screen
@@ -655,6 +656,268 @@ class _WordEditorScreenState extends State<WordEditorScreen> {
                     ),
                   ],
                 ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────
+// PDF Viewer Screen
+// ─────────────────────────────────────────
+class PdfViewerScreen extends StatefulWidget {
+  final String filePath;
+  const PdfViewerScreen({super.key, required this.filePath});
+
+  @override
+  State<PdfViewerScreen> createState() => _PdfViewerScreenState();
+}
+
+class _PdfViewerScreenState extends State<PdfViewerScreen> {
+  late PdfControllerPinch _pdfController;
+  int _currentPage = 1;
+  int _totalPages = 0;
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPdf();
+  }
+
+  void _loadPdf() {
+    try {
+      _pdfController = PdfControllerPinch(
+        document: PdfDocument.openFile(widget.filePath),
+      );
+      setState(() => _loading = false);
+    } catch (e) {
+      setState(() {
+        _error = 'Could not open PDF: $e';
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _pdfController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D1117),
+      appBar: _buildAppBar(),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFFE53935)))
+          : _error != null
+              ? _buildError()
+              : _buildPdfView(),
+      bottomNavigationBar: (!_loading && _error == null) ? _buildPageBar() : null,
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      backgroundColor: Colors.white.withAlpha(13),
+      foregroundColor: Colors.white,
+      elevation: 0,
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back_ios_new_rounded),
+        onPressed: () => Navigator.of(context).pop(),
+      ),
+      title: Row(
+        children: [
+          const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFFE53935), size: 20),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              p.basename(widget.filePath),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (_totalPages > 0) ...[
+            const SizedBox(width: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFE53935).withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '$_currentPage / $_totalPages',
+                style: const TextStyle(
+                  color: Color(0xFFE53935),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        IconButton(
+          tooltip: 'Previous Page',
+          icon: const Icon(Icons.chevron_left_rounded),
+          onPressed: _currentPage > 1
+              ? () => _pdfController.previousPage(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  )
+              : null,
+        ),
+        IconButton(
+          tooltip: 'Next Page',
+          icon: const Icon(Icons.chevron_right_rounded),
+          onPressed: _totalPages > 0 && _currentPage < _totalPages
+              ? () => _pdfController.nextPage(
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeInOut,
+                  )
+              : null,
+        ),
+        IconButton(
+          tooltip: 'Open in Preview',
+          icon: const Icon(Icons.open_in_new_rounded),
+          onPressed: () async {
+            try {
+              await Process.run('open', [widget.filePath]);
+            } catch (_) {}
+          },
+        ),
+        const SizedBox(width: 8),
+      ],
+    );
+  }
+
+  Widget _buildPdfView() {
+    return PdfViewPinch(
+      controller: _pdfController,
+      onDocumentLoaded: (doc) {
+        setState(() => _totalPages = doc.pagesCount);
+      },
+      onPageChanged: (page) {
+        setState(() => _currentPage = page);
+      },
+      builders: PdfViewPinchBuilders<DefaultBuilderOptions>(
+        options: const DefaultBuilderOptions(),
+        documentLoaderBuilder: (_) => const Center(
+          child: CircularProgressIndicator(color: Color(0xFFE53935)),
+        ),
+        pageLoaderBuilder: (_) => const Center(
+          child: CircularProgressIndicator(color: Color(0xFFE53935)),
+        ),
+        errorBuilder: (_, err) => Center(
+          child: Text('Error: $err', style: const TextStyle(color: Colors.red)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPageBar() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(height: 1, color: Colors.white.withAlpha(20)),
+        Container(
+          height: 55,
+          color: Colors.white.withAlpha(8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.first_page_rounded, color: Colors.white54),
+                onPressed: _currentPage > 1
+                    ? () => _pdfController.animateToPage(
+                          pageNumber: 1,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        )
+                    : null,
+              ),
+              IconButton(
+                icon: const Icon(Icons.chevron_left_rounded, color: Colors.white70),
+                onPressed: _currentPage > 1
+                    ? () => _pdfController.previousPage(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeInOut,
+                        )
+                    : null,
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE53935).withAlpha(30),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  'Page $_currentPage of $_totalPages',
+                  style: const TextStyle(
+                    color: Color(0xFFE53935),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                icon: const Icon(Icons.chevron_right_rounded, color: Colors.white70),
+                onPressed: _totalPages > 0 && _currentPage < _totalPages
+                    ? () => _pdfController.nextPage(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeInOut,
+                        )
+                    : null,
+              ),
+              IconButton(
+                icon: const Icon(Icons.last_page_rounded, color: Colors.white54),
+                onPressed: _totalPages > 0 && _currentPage < _totalPages
+                    ? () => _pdfController.animateToPage(
+                          pageNumber: _totalPages,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeInOut,
+                        )
+                    : null,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildError() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline_rounded, color: Colors.red, size: 48),
+            const SizedBox(height: 12),
+            Text(
+              _error!,
+              style: const TextStyle(color: Colors.white70),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            OutlinedButton.icon(
+              onPressed: () async {
+                try {
+                  await Process.run('open', [widget.filePath]);
+                } catch (_) {}
+              },
+              icon: const Icon(Icons.open_in_new_rounded, color: Colors.white70),
+              label: const Text('Open in Preview', style: TextStyle(color: Colors.white)),
+              style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.white24)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

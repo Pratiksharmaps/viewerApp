@@ -76,7 +76,6 @@ class _MainScreenState extends State<MainScreen>
     with SingleTickerProviderStateMixin {
   static const fileEventsChannel = MethodChannel('com.viewerapp/file_events');
   static const quickLookChannel = MethodChannel('com.viewerapp/quicklook');
-  static const editorChannel = MethodChannel('com.viewerapp/editor');
 
   String? _openedFilePath;
   List<String> _history = [];
@@ -86,6 +85,7 @@ class _MainScreenState extends State<MainScreen>
   // License Guard State
   bool _isLicensed = true;
   bool _loadingLicense = true;
+  int _docOpenCount = 0;
   final TextEditingController _licenseController = TextEditingController();
 
   @override
@@ -111,20 +111,12 @@ class _MainScreenState extends State<MainScreen>
 
   Future<void> _checkLicense() async {
     final prefs = await SharedPreferences.getInstance();
-    int launches = prefs.getInt('appLaunchCount') ?? 0;
-    launches++;
-    await prefs.setInt('appLaunchCount', launches);
-
+    _docOpenCount = prefs.getInt('docOpenCount') ?? 0;
     bool licensed = prefs.getBool('isLicensed') ?? false;
 
     setState(() {
       _loadingLicense = false;
-      // Require license after the 1st launch
-      if (!licensed && launches > 1) {
-        _isLicensed = false;
-      } else {
-        _isLicensed = true;
-      }
+      _isLicensed = licensed;
     });
   }
 
@@ -135,7 +127,7 @@ class _MainScreenState extends State<MainScreen>
     final bytes = utf8.encode(input);
     final digest = sha256.convert(bytes).toString();
     
-    // Hash of "PratikSharma1"
+
     if (digest == '17ec9b3e14f11a549eff9c8ae5211616695180b42c3d42deeb22bf7e39297353') {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('isLicensed', true);
@@ -179,6 +171,17 @@ class _MainScreenState extends State<MainScreen>
       _showError('File not found: ${p.basename(path)}');
       return;
     }
+
+    if (!_isLicensed) {
+      if (_docOpenCount >= 5) {
+        setState(() {}); // trigger build to show overlay
+        return;
+      }
+      _docOpenCount++;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('docOpenCount', _docOpenCount);
+    }
+
     setState(() => _openedFilePath = path);
     await FileHistoryService.addFile(path);
     await _loadHistory();
@@ -188,12 +191,24 @@ class _MainScreenState extends State<MainScreen>
     }
   }
 
-  void _selectRecent(String path) {
+  Future<void> _selectRecent(String path) async {
+    if (!_isLicensed && _docOpenCount >= 5) {
+      setState(() {});
+      return;
+    }
+
     if (!File(path).existsSync()) {
       _showError('File not found: ${p.basename(path)}');
       _removeFromHistory(path);
       return;
     }
+
+    if (!_isLicensed) {
+      _docOpenCount++;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('docOpenCount', _docOpenCount);
+    }
+
     setState(() => _openedFilePath = path);
     _animController.forward(from: 0);
   }
@@ -202,7 +217,7 @@ class _MainScreenState extends State<MainScreen>
     try {
       FilePickerResult? result = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['doc', 'docx', 'xls', 'xlsx'],
+        allowedExtensions: ['doc', 'docx', 'xls', 'xlsx', 'pdf'],
       );
       if (result != null && result.files.single.path != null) {
         await _openFile(result.files.single.path!);
@@ -223,9 +238,13 @@ class _MainScreenState extends State<MainScreen>
   Future<void> _editFile(String path) async {
     final ext = p.extension(path).toLowerCase();
 
-    // In-app editing is only supported for modern zip-based formats (.xlsx, .docx)
-    // Older binary formats (.xls, .doc) will fallback to native system apps.
-    if (ext == '.xlsx') {
+    if (ext == '.pdf') {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => PdfViewerScreen(filePath: path),
+        ),
+      );
+    } else if (ext == '.xlsx') {
       Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => ExcelEditorScreen(filePath: path),
@@ -284,12 +303,14 @@ class _MainScreenState extends State<MainScreen>
   IconData _iconForFile(String path) {
     final ext = p.extension(path).toLowerCase();
     if (ext == '.xlsx' || ext == '.xls') return Icons.table_chart_rounded;
+    if (ext == '.pdf') return Icons.picture_as_pdf_rounded;
     return Icons.description_rounded;
   }
 
   Color _colorForFile(String path) {
     final ext = p.extension(path).toLowerCase();
     if (ext == '.xlsx' || ext == '.xls') return const Color(0xFF34C759);
+    if (ext == '.pdf') return const Color(0xFFE53935);
     return const Color(0xFF007AFF);
   }
 
@@ -320,7 +341,7 @@ class _MainScreenState extends State<MainScreen>
               ],
             ),
           ),
-          if (!_isLicensed) _buildLicenseOverlay(),
+          if (!_isLicensed && _docOpenCount >= 5) _buildLicenseOverlay(),
         ],
       ),
     );
@@ -343,7 +364,7 @@ class _MainScreenState extends State<MainScreen>
                     const SizedBox(height: 24),
                     const Text('License Required', style: TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
                     const SizedBox(height: 12),
-                    Text('Your trial period (1 launch) has expired. Please enter your license key to continue using the app.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14, height: 1.5)),
+                    Text('Your trial period (5 document openings) has expired. Please enter your license key to continue using the app.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 14, height: 1.5)),
                     const SizedBox(height: 32),
                     TextField(
                       controller: _licenseController,
@@ -420,6 +441,33 @@ class _MainScreenState extends State<MainScreen>
                         fontSize: 17,
                         fontWeight: FontWeight.w700,
                         letterSpacing: -0.5,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: _isLicensed 
+                          ? const Color(0xFF34C759).withOpacity(0.2) 
+                          : Colors.orange.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: _isLicensed 
+                            ? const Color(0xFF34C759).withOpacity(0.5) 
+                            : Colors.orange.withOpacity(0.5),
+                        ),
+                      ),
+                      child: Text(
+                        _isLicensed 
+                          ? 'ACTIVATED' 
+                          : 'TRIAL ${5 - _docOpenCount}/5 LEFT',
+                        style: TextStyle(
+                          color: _isLicensed 
+                            ? const Color(0xFF34C759) 
+                            : Colors.orange,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ),
                   ],
@@ -617,7 +665,7 @@ class _MainScreenState extends State<MainScreen>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Pick a file or double-click an Excel / Word\ndocument in Finder to open it here.',
+                  'Pick a file or double-click an Excel, Word, or PDF\ndocument in Finder to open it here.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.5),
@@ -646,6 +694,7 @@ class _MainScreenState extends State<MainScreen>
     final fileName = p.basename(path);
     final ext = p.extension(path).toLowerCase();
     final isSpreadsheet = ext == '.xlsx' || ext == '.xls';
+    final isPdf = ext == '.pdf';
     final fileColor = _colorForFile(path);
     final fileIcon = _iconForFile(path);
 
@@ -708,7 +757,9 @@ class _MainScreenState extends State<MainScreen>
                     child: Text(
                       isSpreadsheet
                           ? 'Microsoft Excel Spreadsheet'
-                          : 'Microsoft Word Document',
+                          : isPdf
+                              ? 'PDF Document'
+                              : 'Microsoft Word Document',
                       style: TextStyle(
                         color: fileColor,
                         fontSize: 12,
@@ -729,11 +780,22 @@ class _MainScreenState extends State<MainScreen>
                   ),
                   const SizedBox(height: 28),
                   // Action buttons
-                  Row(
+                   Row(
                     children: [
                       Expanded(
                         child: _buildGlassButton(
-                          onPressed: () => _showQuickLook(path),
+                          onPressed: () {
+                            final ext = p.extension(path).toLowerCase();
+                            if (ext == '.pdf') {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => PdfViewerScreen(filePath: path),
+                                ),
+                              );
+                            } else {
+                              _showQuickLook(path);
+                            }
+                          },
                           icon: Icons.preview_rounded,
                           label: 'Preview',
                           gradient: const LinearGradient(
@@ -745,8 +807,8 @@ class _MainScreenState extends State<MainScreen>
                       Expanded(
                         child: _buildGlassButton(
                           onPressed: () => _editFile(path),
-                          icon: Icons.edit_rounded,
-                          label: 'Edit',
+                          icon: isPdf ? Icons.picture_as_pdf_rounded : Icons.edit_rounded,
+                          label: isPdf ? 'Open PDF' : 'Edit',
                           gradient: LinearGradient(
                             colors: [fileColor, fileColor.withOpacity(0.7)],
                           ),
